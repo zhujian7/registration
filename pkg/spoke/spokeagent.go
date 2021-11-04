@@ -19,6 +19,7 @@ import (
 	"open-cluster-management.io/registration/pkg/spoke/addon"
 	"open-cluster-management.io/registration/pkg/spoke/managedcluster"
 
+	osclient "github.com/openshift/library-go/pkg/config/client"
 	"github.com/openshift/library-go/pkg/controller/controllercmd"
 	"github.com/openshift/library-go/pkg/controller/factory"
 	"github.com/openshift/library-go/pkg/operator/events"
@@ -60,6 +61,7 @@ type SpokeAgentOptions struct {
 	SpokeExternalServerURLs  []string
 	ClusterHealthCheckPeriod time.Duration
 	MaxCustomClusterClaims   int
+	SpokeKubeconfig          string
 }
 
 // NewSpokeAgentOptions returns a SpokeAgentOptions
@@ -74,9 +76,10 @@ func NewSpokeAgentOptions() *SpokeAgentOptions {
 
 // RunSpokeAgent starts the controllers on spoke agent to register to the hub.
 //
-// The spoke agent uses three kubeconfigs for different concerns:
-// - The 'spoke' kubeconfig: used to communicate with the spoke cluster where
-//   the agent is running.
+// The spoke agent uses four kubeconfigs for different concerns:
+// - The 'agent' kubeconfig: used to communicate with the cluster where the agent is running.
+// - The 'spoke' kubeconfig: used to communicate with the spoke/managed cluster which will
+//   be registered to the hub.
 // - The 'bootstrap' kubeconfig: used to communicate with the hub in order to
 //   submit a CertificateSigningRequest, begin the join flow with the hub, and
 //   to write the 'hub' kubeconfig.
@@ -94,8 +97,19 @@ func NewSpokeAgentOptions() *SpokeAgentOptions {
 // create a valid hub kubeconfig. Once the hub kubeconfig is valid, the
 // temporary controller is stopped and the main controllers are started.
 func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext *controllercmd.ControllerContext) error {
-	// create kube client
-	spokeKubeClient, err := kubernetes.NewForConfig(controllerContext.KubeConfig)
+	// create agent kube client
+	agentKubeClient, err := kubernetes.NewForConfig(controllerContext.KubeConfig)
+	if err != nil {
+		return err
+	}
+
+	// load spoke client config and create spoke clients,
+	// the registration agent may running not in the spoke/managed cluster.
+	spokeClientConfig, err := osclient.GetKubeConfigOrInClusterConfig(o.SpokeKubeconfig, nil)
+	if err != nil {
+		return fmt.Errorf("unable to load spoke kubeconfig from file %q: %w", o.SpokeKubeconfig, err)
+	}
+	spokeKubeClient, err := kubernetes.NewForConfig(spokeClientConfig)
 	if err != nil {
 		return err
 	}
@@ -115,7 +129,7 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 	namespacedSpokeKubeInformerFactory := informers.NewSharedInformerFactoryWithOptions(spokeKubeClient, 10*time.Minute, informers.WithNamespace(o.ComponentNamespace))
 
 	// get spoke cluster CA bundle
-	spokeClusterCABundle, err := o.getSpokeClusterCABundle(controllerContext.KubeConfig)
+	spokeClusterCABundle, err := o.getSpokeClusterCABundle(spokeClientConfig)
 	if err != nil {
 		return err
 	}
@@ -145,7 +159,8 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 
 	hubKubeconfigSecretController := managedcluster.NewHubKubeconfigSecretController(
 		o.HubKubeconfigDir, o.ComponentNamespace, o.HubKubeconfigSecret,
-		spokeKubeClient.CoreV1(),
+		// the hub kubeconfig secret stored in the cluster where the agent pod runs
+		agentKubeClient.CoreV1(),
 		namespacedSpokeKubeInformerFactory.Core().V1().Secrets(),
 		controllerContext.EventRecorder,
 	)
@@ -177,7 +192,8 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 		clientCertForHubController := managedcluster.NewClientCertForHubController(
 			o.ClusterName, o.AgentName, o.ComponentNamespace, o.HubKubeconfigSecret,
 			kubeconfigData,
-			spokeKubeClient.CoreV1(),
+			// store the secret in the cluster where the agent pod runs
+			agentKubeClient.CoreV1(),
 			bootstrapKubeClient.CertificatesV1().CertificateSigningRequests(),
 			bootstrapInformerFactory.Certificates().V1().CertificateSigningRequests(),
 			namespacedSpokeKubeInformerFactory.Core().V1().Secrets(),
@@ -251,7 +267,8 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 	clientCertForHubController := managedcluster.NewClientCertForHubController(
 		o.ClusterName, o.AgentName, o.ComponentNamespace, o.HubKubeconfigSecret,
 		kubeconfigData,
-		spokeKubeClient.CoreV1(),
+		// store the secret in the cluster where the agent pod runs
+		agentKubeClient.CoreV1(),
 		hubKubeClient.CertificatesV1().CertificateSigningRequests(),
 		hubKubeInformerFactory.Certificates().V1().CertificateSigningRequests(),
 		namespacedSpokeKubeInformerFactory.Core().V1().Secrets(),
@@ -321,7 +338,8 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 			o.ClusterName,
 			o.AgentName,
 			kubeconfigData,
-			spokeKubeClient,
+			agentKubeClient,
+			// addon runs in the cluster where the agent pod runs
 			hubKubeInformerFactory.Certificates().V1().CertificateSigningRequests(),
 			addOnInformerFactory.Addon().V1alpha1().ManagedClusterAddOns(),
 			hubKubeClient.CertificatesV1().CertificateSigningRequests(),
@@ -363,6 +381,8 @@ func (o *SpokeAgentOptions) AddFlags(fs *pflag.FlagSet) {
 		"The name of secret in component namespace storing kubeconfig for hub.")
 	fs.StringVar(&o.HubKubeconfigDir, "hub-kubeconfig-dir", o.HubKubeconfigDir,
 		"The mount path of hub-kubeconfig-secret in the container.")
+	fs.StringVar(&o.SpokeKubeconfig, "spoke-kubeconfig", o.SpokeKubeconfig,
+		"The path of the kubeconfig file for spoke cluster.")
 	fs.StringArrayVar(&o.SpokeExternalServerURLs, "spoke-external-server-urls", o.SpokeExternalServerURLs,
 		"A list of reachable spoke cluster api server URLs for hub cluster.")
 	fs.DurationVar(&o.ClusterHealthCheckPeriod, "cluster-healthcheck-period", o.ClusterHealthCheckPeriod,
