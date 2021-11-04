@@ -19,7 +19,6 @@ import (
 	"open-cluster-management.io/registration/pkg/spoke/addon"
 	"open-cluster-management.io/registration/pkg/spoke/managedcluster"
 
-	osclient "github.com/openshift/library-go/pkg/config/client"
 	"github.com/openshift/library-go/pkg/controller/controllercmd"
 	"github.com/openshift/library-go/pkg/controller/factory"
 	"github.com/openshift/library-go/pkg/operator/events"
@@ -51,30 +50,96 @@ const (
 var AddOnLeaseControllerSyncInterval = 30 * time.Second
 
 // SpokeAgentOptions holds configuration for spoke cluster agent
-type SpokeAgentOptions struct {
-	ComponentNamespace       string
-	ClusterName              string
-	AgentName                string
-	BootstrapKubeconfig      string
-	HubKubeconfigSecret      string
-	HubKubeconfigDir         string
-	SpokeExternalServerURLs  []string
-	ClusterHealthCheckPeriod time.Duration
-	MaxCustomClusterClaims   int
-	SpokeKubeconfig          string
+type spokeAgent struct {
+	componentNamespace       string
+	clusterName              string
+	agentName                string
+	bootstrapKubeconfig      string
+	hubKubeconfigSecret      string
+	hubKubeconfigDir         string
+	spokeExternalServerURLs  []string
+	clusterHealthCheckPeriod time.Duration
+	maxCustomClusterClaims   int
+	spokeKubeconfigFile      string
+	spokeKubeConfig          *rest.Config
 }
 
-// NewSpokeAgentOptions returns a SpokeAgentOptions
-func NewSpokeAgentOptions() *SpokeAgentOptions {
-	return &SpokeAgentOptions{
-		HubKubeconfigSecret:      "hub-kubeconfig-secret",
-		HubKubeconfigDir:         "/spoke/hub-kubeconfig",
-		ClusterHealthCheckPeriod: 1 * time.Minute,
-		MaxCustomClusterClaims:   20,
+// SpokeAgentOption defines the functional option type for spokeAgent.
+type SpokeAgentOption func(*spokeAgent) *spokeAgent
+
+// WithClusterName limits the spoke agent to a specific cluster
+func WithClusterName(clusterName string) SpokeAgentOption {
+	return func(s *spokeAgent) *spokeAgent {
+		s.clusterName = clusterName
+		return s
 	}
 }
 
-// RunSpokeAgent starts the controllers on spoke agent to register to the hub.
+// WithBootstrapKubeconfig sets the path of bootstrap kubeconfig
+func WithBootstrapKubeconfig(bootstrapKubeconfig string) SpokeAgentOption {
+	return func(s *spokeAgent) *spokeAgent {
+		s.bootstrapKubeconfig = bootstrapKubeconfig
+		return s
+	}
+}
+
+// WithHubKubeconfigSecret sets the secret of hub kubeconfig
+func WithHubKubeconfigSecret(hubKubeconfigSecret string) SpokeAgentOption {
+	return func(s *spokeAgent) *spokeAgent {
+		s.hubKubeconfigSecret = hubKubeconfigSecret
+		return s
+	}
+}
+
+// WithClusterName sets the hub kubeconfig directory
+func WithHubKubeconfigDir(hubKubeconfigDir string) SpokeAgentOption {
+	return func(s *spokeAgent) *spokeAgent {
+		s.hubKubeconfigDir = hubKubeconfigDir
+		return s
+	}
+}
+
+// WithSpokeKubeConfig sets the kubeconfig for spoke/managed cluster
+func WithSpokeKubeConfig(spokeKubeConfig *rest.Config) SpokeAgentOption {
+	return func(s *spokeAgent) *spokeAgent {
+		s.spokeKubeConfig = spokeKubeConfig
+		return s
+	}
+}
+
+// WithClusterHealthCheckPeriod sets the period of checking cluster health
+func WithClusterHealthCheckPeriod(clusterHealthCheckPeriod time.Duration) SpokeAgentOption {
+	return func(s *spokeAgent) *spokeAgent {
+		s.clusterHealthCheckPeriod = clusterHealthCheckPeriod
+		return s
+	}
+}
+
+// WithMaxCustomClusterClaims sets the maximum number of cluster claims
+func WithMaxCustomClusterClaims(maxCustomClusterClaims int) SpokeAgentOption {
+	return func(s *spokeAgent) *spokeAgent {
+		s.maxCustomClusterClaims = maxCustomClusterClaims
+		return s
+	}
+}
+
+// NewSpokeAgent returns a SpokeAgent
+func NewSpokeAgent(options ...SpokeAgentOption) *spokeAgent {
+	agent := &spokeAgent{
+		hubKubeconfigSecret:      "hub-kubeconfig-secret",
+		hubKubeconfigDir:         "/spoke/hub-kubeconfig",
+		clusterHealthCheckPeriod: 1 * time.Minute,
+		maxCustomClusterClaims:   20,
+	}
+
+	for _, option := range options {
+		option(agent)
+	}
+
+	return agent
+}
+
+// Run starts the controllers on spoke agent to register to the hub.
 //
 // The spoke agent uses four kubeconfigs for different concerns:
 // - The 'agent' kubeconfig: used to communicate with the cluster where the agent is running.
@@ -96,7 +161,7 @@ func NewSpokeAgentOptions() *SpokeAgentOptions {
 // and started if the hub kubeconfig does not exist or is invalid and used to
 // create a valid hub kubeconfig. Once the hub kubeconfig is valid, the
 // temporary controller is stopped and the main controllers are started.
-func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext *controllercmd.ControllerContext) error {
+func (o *spokeAgent) Run(ctx context.Context, controllerContext *controllercmd.ControllerContext) error {
 	// create agent kube client
 	agentKubeClient, err := kubernetes.NewForConfig(controllerContext.KubeConfig)
 	if err != nil {
@@ -105,16 +170,23 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 
 	// load spoke client config and create spoke clients,
 	// the registration agent may running not in the spoke/managed cluster.
-	spokeClientConfig, err := osclient.GetKubeConfigOrInClusterConfig(o.SpokeKubeconfig, nil)
-	if err != nil {
-		return fmt.Errorf("unable to load spoke kubeconfig from file %q: %w", o.SpokeKubeconfig, err)
+	if o.spokeKubeConfig == nil {
+		if o.spokeKubeconfigFile != "" {
+			o.spokeKubeConfig, err = clientcmd.BuildConfigFromFlags("" /* leave masterurl as empty */, o.spokeKubeconfigFile)
+			if err != nil {
+				return fmt.Errorf("unable to load spoke kubeconfig from file %q: %w", o.spokeKubeconfigFile, err)
+			}
+		} else {
+			o.spokeKubeConfig = controllerContext.KubeConfig
+		}
 	}
-	spokeKubeClient, err := kubernetes.NewForConfig(spokeClientConfig)
+
+	spokeKubeClient, err := kubernetes.NewForConfig(o.spokeKubeConfig)
 	if err != nil {
 		return err
 	}
 
-	if err := o.Complete(spokeKubeClient.CoreV1(), ctx, controllerContext.EventRecorder); err != nil {
+	if err := o.complete(spokeKubeClient.CoreV1(), ctx, controllerContext.EventRecorder); err != nil {
 		klog.Fatal(err)
 	}
 
@@ -122,22 +194,22 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 		klog.Fatal(err)
 	}
 
-	klog.Infof("Cluster name is %q and agent name is %q", o.ClusterName, o.AgentName)
+	klog.Infof("Cluster name is %q and agent name is %q", o.clusterName, o.agentName)
 
 	// create shared informer factory for spoke cluster
 	spokeKubeInformerFactory := informers.NewSharedInformerFactory(spokeKubeClient, 10*time.Minute)
-	namespacedSpokeKubeInformerFactory := informers.NewSharedInformerFactoryWithOptions(spokeKubeClient, 10*time.Minute, informers.WithNamespace(o.ComponentNamespace))
+	namespacedSpokeKubeInformerFactory := informers.NewSharedInformerFactoryWithOptions(spokeKubeClient, 10*time.Minute, informers.WithNamespace(o.componentNamespace))
 
 	// get spoke cluster CA bundle
-	spokeClusterCABundle, err := o.getSpokeClusterCABundle(spokeClientConfig)
+	spokeClusterCABundle, err := o.getSpokeClusterCABundle(o.spokeKubeConfig)
 	if err != nil {
 		return err
 	}
 
 	// load bootstrap client config and create bootstrap clients
-	bootstrapClientConfig, err := clientcmd.BuildConfigFromFlags("", o.BootstrapKubeconfig)
+	bootstrapClientConfig, err := clientcmd.BuildConfigFromFlags("", o.bootstrapKubeconfig)
 	if err != nil {
-		return fmt.Errorf("unable to load bootstrap kubeconfig from file %q: %w", o.BootstrapKubeconfig, err)
+		return fmt.Errorf("unable to load bootstrap kubeconfig from file %q: %w", o.bootstrapKubeconfig, err)
 	}
 	bootstrapKubeClient, err := kubernetes.NewForConfig(bootstrapClientConfig)
 	if err != nil {
@@ -150,7 +222,7 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 
 	// start a SpokeClusterCreatingController to make sure there is a spoke cluster on hub cluster
 	spokeClusterCreatingController := managedcluster.NewManagedClusterCreatingController(
-		o.ClusterName, o.SpokeExternalServerURLs,
+		o.clusterName, o.spokeExternalServerURLs,
 		spokeClusterCABundle,
 		bootstrapClusterClient,
 		controllerContext.EventRecorder,
@@ -158,7 +230,7 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 	go spokeClusterCreatingController.Run(ctx, 1)
 
 	hubKubeconfigSecretController := managedcluster.NewHubKubeconfigSecretController(
-		o.HubKubeconfigDir, o.ComponentNamespace, o.HubKubeconfigSecret,
+		o.hubKubeconfigDir, o.componentNamespace, o.hubKubeconfigSecret,
 		// the hub kubeconfig secret stored in the cluster where the agent pod runs
 		agentKubeClient.CoreV1(),
 		namespacedSpokeKubeInformerFactory.Core().V1().Secrets(),
@@ -188,9 +260,9 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 			return err
 		}
 
-		controllerName := fmt.Sprintf("BootstrapClientCertController@cluster:%s", o.ClusterName)
+		controllerName := fmt.Sprintf("BootstrapClientCertController@cluster:%s", o.clusterName)
 		clientCertForHubController := managedcluster.NewClientCertForHubController(
-			o.ClusterName, o.AgentName, o.ComponentNamespace, o.HubKubeconfigSecret,
+			o.clusterName, o.agentName, o.componentNamespace, o.hubKubeconfigSecret,
 			kubeconfigData,
 			// store the secret in the cluster where the agent pod runs
 			agentKubeClient.CoreV1(),
@@ -221,7 +293,7 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 	}
 
 	// create hub clients and shared informer factories from hub kube config
-	hubClientConfig, err := clientcmd.BuildConfigFromFlags("", path.Join(o.HubKubeconfigDir, clientcert.KubeconfigFile))
+	hubClientConfig, err := clientcmd.BuildConfigFromFlags("", path.Join(o.hubKubeconfigDir, clientcert.KubeconfigFile))
 	if err != nil {
 		return err
 	}
@@ -243,13 +315,13 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 
 	hubKubeInformerFactory := informers.NewSharedInformerFactory(hubKubeClient, 10*time.Minute)
 	addOnInformerFactory := addoninformers.NewSharedInformerFactoryWithOptions(
-		addOnClient, 10*time.Minute, addoninformers.WithNamespace(o.ClusterName))
+		addOnClient, 10*time.Minute, addoninformers.WithNamespace(o.clusterName))
 	// create a cluster informer factory with name field selector because we just need to handle the current spoke cluster
 	hubClusterInformerFactory := clusterv1informers.NewSharedInformerFactoryWithOptions(
 		hubClusterClient,
 		10*time.Minute,
 		clusterv1informers.WithTweakListOptions(func(listOptions *metav1.ListOptions) {
-			listOptions.FieldSelector = fields.OneTermEqualSelector("metadata.name", o.ClusterName).String()
+			listOptions.FieldSelector = fields.OneTermEqualSelector("metadata.name", o.clusterName).String()
 		}),
 	)
 
@@ -263,9 +335,9 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 	}
 
 	// create another ClientCertForHubController for client certificate rotation
-	controllerName := fmt.Sprintf("ClientCertController@cluster:%s", o.ClusterName)
+	controllerName := fmt.Sprintf("ClientCertController@cluster:%s", o.clusterName)
 	clientCertForHubController := managedcluster.NewClientCertForHubController(
-		o.ClusterName, o.AgentName, o.ComponentNamespace, o.HubKubeconfigSecret,
+		o.clusterName, o.agentName, o.componentNamespace, o.hubKubeconfigSecret,
 		kubeconfigData,
 		// store the secret in the cluster where the agent pod runs
 		agentKubeClient.CoreV1(),
@@ -278,7 +350,7 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 
 	// create ManagedClusterJoiningController to reconcile instances of ManagedCluster on the managed cluster
 	managedClusterJoiningController := managedcluster.NewManagedClusterJoiningController(
-		o.ClusterName,
+		o.clusterName,
 		hubClusterClient,
 		hubClusterInformerFactory.Cluster().V1().ManagedClusters(),
 		controllerContext.EventRecorder,
@@ -286,7 +358,7 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 
 	// create ManagedClusterLeaseController to keep the spoke cluster heartbeat
 	managedClusterLeaseController := managedcluster.NewManagedClusterLeaseController(
-		o.ClusterName,
+		o.clusterName,
 		hubKubeClient,
 		hubClusterInformerFactory.Cluster().V1().ManagedClusters(),
 		controllerContext.EventRecorder,
@@ -294,12 +366,12 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 
 	// create NewManagedClusterStatusController to update the spoke cluster status
 	managedClusterHealthCheckController := managedcluster.NewManagedClusterStatusController(
-		o.ClusterName,
+		o.clusterName,
 		hubClusterClient,
 		hubClusterInformerFactory.Cluster().V1().ManagedClusters(),
 		spokeKubeClient.Discovery(),
 		spokeKubeInformerFactory.Core().V1().Nodes(),
-		o.ClusterHealthCheckPeriod,
+		o.clusterHealthCheckPeriod,
 		controllerContext.EventRecorder,
 	)
 	spokeClusterClient, err := clusterv1client.NewForConfig(controllerContext.KubeConfig)
@@ -312,8 +384,8 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 	if features.DefaultMutableFeatureGate.Enabled(features.ClusterClaim) {
 		// create managedClusterClaimController to sync cluster claims
 		managedClusterClaimController = managedcluster.NewManagedClusterClaimController(
-			o.ClusterName,
-			o.MaxCustomClusterClaims,
+			o.clusterName,
+			o.maxCustomClusterClaims,
 			hubClusterClient,
 			hubClusterInformerFactory.Cluster().V1().ManagedClusters(),
 			spokeClusterInformerFactory.Cluster().V1alpha1().ClusterClaims(),
@@ -325,7 +397,7 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 	var addOnRegistrationController factory.Controller
 	if features.DefaultMutableFeatureGate.Enabled(features.AddonManagement) {
 		addOnLeaseController = addon.NewManagedClusterAddOnLeaseController(
-			o.ClusterName,
+			o.clusterName,
 			addOnClient,
 			addOnInformerFactory.Addon().V1alpha1().ManagedClusterAddOns(),
 			hubKubeClient.CoordinationV1(),
@@ -335,8 +407,8 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 		)
 
 		addOnRegistrationController = addon.NewAddOnRegistrationController(
-			o.ClusterName,
-			o.AgentName,
+			o.clusterName,
+			o.agentName,
 			kubeconfigData,
 			agentKubeClient,
 			// addon runs in the cluster where the agent pod runs
@@ -371,75 +443,75 @@ func (o *SpokeAgentOptions) RunSpokeAgent(ctx context.Context, controllerContext
 }
 
 // AddFlags registers flags for Agent
-func (o *SpokeAgentOptions) AddFlags(fs *pflag.FlagSet) {
+func (o *spokeAgent) AddFlags(fs *pflag.FlagSet) {
 	features.DefaultMutableFeatureGate.AddFlag(fs)
-	fs.StringVar(&o.ClusterName, "cluster-name", o.ClusterName,
+	fs.StringVar(&o.clusterName, "cluster-name", o.clusterName,
 		"If non-empty, will use as cluster name instead of generated random name.")
-	fs.StringVar(&o.BootstrapKubeconfig, "bootstrap-kubeconfig", o.BootstrapKubeconfig,
+	fs.StringVar(&o.bootstrapKubeconfig, "bootstrap-kubeconfig", o.bootstrapKubeconfig,
 		"The path of the kubeconfig file for agent bootstrap.")
-	fs.StringVar(&o.HubKubeconfigSecret, "hub-kubeconfig-secret", o.HubKubeconfigSecret,
+	fs.StringVar(&o.hubKubeconfigSecret, "hub-kubeconfig-secret", o.hubKubeconfigSecret,
 		"The name of secret in component namespace storing kubeconfig for hub.")
-	fs.StringVar(&o.HubKubeconfigDir, "hub-kubeconfig-dir", o.HubKubeconfigDir,
+	fs.StringVar(&o.hubKubeconfigDir, "hub-kubeconfig-dir", o.hubKubeconfigDir,
 		"The mount path of hub-kubeconfig-secret in the container.")
-	fs.StringVar(&o.SpokeKubeconfig, "spoke-kubeconfig", o.SpokeKubeconfig,
+	fs.StringVar(&o.spokeKubeconfigFile, "spoke-kubeconfig", o.spokeKubeconfigFile,
 		"The path of the kubeconfig file for spoke cluster.")
-	fs.StringArrayVar(&o.SpokeExternalServerURLs, "spoke-external-server-urls", o.SpokeExternalServerURLs,
+	fs.StringArrayVar(&o.spokeExternalServerURLs, "spoke-external-server-urls", o.spokeExternalServerURLs,
 		"A list of reachable spoke cluster api server URLs for hub cluster.")
-	fs.DurationVar(&o.ClusterHealthCheckPeriod, "cluster-healthcheck-period", o.ClusterHealthCheckPeriod,
+	fs.DurationVar(&o.clusterHealthCheckPeriod, "cluster-healthcheck-period", o.clusterHealthCheckPeriod,
 		"The period to check managed cluster kube-apiserver health")
-	fs.IntVar(&o.MaxCustomClusterClaims, "max-custom-cluster-claims", o.MaxCustomClusterClaims,
+	fs.IntVar(&o.maxCustomClusterClaims, "max-custom-cluster-claims", o.maxCustomClusterClaims,
 		"The max number of custom cluster claims to expose.")
 }
 
 // Validate verifies the inputs.
-func (o *SpokeAgentOptions) Validate() error {
-	if o.BootstrapKubeconfig == "" {
+func (o *spokeAgent) Validate() error {
+	if o.bootstrapKubeconfig == "" {
 		return errors.New("bootstrap-kubeconfig is required")
 	}
 
-	if o.ClusterName == "" {
+	if o.clusterName == "" {
 		return errors.New("cluster name is empty")
 	}
 
-	if o.AgentName == "" {
+	if o.agentName == "" {
 		return errors.New("agent name is empty")
 	}
 
 	// if SpokeExternalServerURLs is specified we validate every URL in it, we expect the spoke external server URL is https
-	if len(o.SpokeExternalServerURLs) != 0 {
-		for _, serverURL := range o.SpokeExternalServerURLs {
+	if len(o.spokeExternalServerURLs) != 0 {
+		for _, serverURL := range o.spokeExternalServerURLs {
 			if !helpers.IsValidHTTPSURL(serverURL) {
-				return errors.New(fmt.Sprintf("%q is invalid", serverURL))
+				return fmt.Errorf("%q is invalid", serverURL)
 			}
 		}
 	}
 
-	if o.ClusterHealthCheckPeriod <= 0 {
+	if o.clusterHealthCheckPeriod <= 0 {
 		return errors.New("cluster healthcheck period must greater than zero")
 	}
 
 	return nil
 }
 
-// Complete fills in missing values.
-func (o *SpokeAgentOptions) Complete(coreV1Client corev1client.CoreV1Interface, ctx context.Context, recorder events.Recorder) error {
+// complete fills in missing values.
+func (o *spokeAgent) complete(coreV1Client corev1client.CoreV1Interface, ctx context.Context, recorder events.Recorder) error {
 	// get component namespace of spoke agent
 	nsBytes, err := ioutil.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
 	if err != nil {
-		o.ComponentNamespace = defaultSpokeComponentNamespace
+		o.componentNamespace = defaultSpokeComponentNamespace
 	} else {
-		o.ComponentNamespace = string(nsBytes)
+		o.componentNamespace = string(nsBytes)
 	}
 
 	// dump data in hub kubeconfig secret into file system if it exists
-	err = managedcluster.DumpSecret(coreV1Client, o.ComponentNamespace, o.HubKubeconfigSecret,
-		o.HubKubeconfigDir, ctx, recorder)
+	err = managedcluster.DumpSecret(coreV1Client, o.componentNamespace, o.hubKubeconfigSecret,
+		o.hubKubeconfigDir, ctx, recorder)
 	if err != nil {
 		return err
 	}
 
 	// load or generate cluster/agent names
-	o.ClusterName, o.AgentName = o.getOrGenerateClusterAgentNames()
+	o.clusterName, o.agentName = o.getOrGenerateClusterAgentNames()
 
 	return nil
 }
@@ -463,20 +535,20 @@ func generateAgentName() string {
 // Normally, KubeconfigFile/TLSKeyFile/TLSCertFile will be created once the bootstrap process
 // completes. Changing the name of the cluster will make the existing hub kubeconfig invalid,
 // because certificate in TLSCertFile is issued to a specific cluster/agent.
-func (o *SpokeAgentOptions) hasValidHubClientConfig() (bool, error) {
-	kubeconfigPath := path.Join(o.HubKubeconfigDir, clientcert.KubeconfigFile)
+func (o *spokeAgent) hasValidHubClientConfig() (bool, error) {
+	kubeconfigPath := path.Join(o.hubKubeconfigDir, clientcert.KubeconfigFile)
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		klog.V(4).Infof("Kubeconfig file %q not found", kubeconfigPath)
 		return false, nil
 	}
 
-	keyPath := path.Join(o.HubKubeconfigDir, clientcert.TLSKeyFile)
+	keyPath := path.Join(o.hubKubeconfigDir, clientcert.TLSKeyFile)
 	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
 		klog.V(4).Infof("TLS key file %q not found", keyPath)
 		return false, nil
 	}
 
-	certPath := path.Join(o.HubKubeconfigDir, clientcert.TLSCertFile)
+	certPath := path.Join(o.hubKubeconfigDir, clientcert.TLSCertFile)
 	certData, err := ioutil.ReadFile(path.Clean(certPath))
 	if err != nil {
 		klog.V(4).Infof("Unable to load TLS cert file %q", certPath)
@@ -488,10 +560,10 @@ func (o *SpokeAgentOptions) hasValidHubClientConfig() (bool, error) {
 	if err != nil {
 		return false, nil
 	}
-	if clusterName != o.ClusterName || agentName != o.AgentName {
+	if clusterName != o.clusterName || agentName != o.agentName {
 		klog.V(4).Infof("Certificate in file %q is issued for agent %q instead of %q",
 			certPath, fmt.Sprintf("%s:%s", clusterName, agentName),
-			fmt.Sprintf("%s:%s", o.ClusterName, o.AgentName))
+			fmt.Sprintf("%s:%s", o.clusterName, o.agentName))
 		return false, nil
 	}
 
@@ -510,22 +582,22 @@ func (o *SpokeAgentOptions) hasValidHubClientConfig() (bool, error) {
 //   1. Parse agent name from the common name of the certification subject if the certification exists;
 //   2. Fallback to agent name in the mounted secret if it exists;
 //   3. Generate a random agent name then;
-func (o *SpokeAgentOptions) getOrGenerateClusterAgentNames() (string, string) {
+func (o *spokeAgent) getOrGenerateClusterAgentNames() (string, string) {
 	// try to load cluster/agent name from tls certification
 	var clusterNameInCert, agentNameInCert string
-	certPath := path.Join(o.HubKubeconfigDir, clientcert.TLSCertFile)
+	certPath := path.Join(o.hubKubeconfigDir, clientcert.TLSCertFile)
 	certData, certErr := ioutil.ReadFile(path.Clean(certPath))
 	if certErr == nil {
 		clusterNameInCert, agentNameInCert, _ = managedcluster.GetClusterAgentNamesFromCertificate(certData)
 	}
 
-	clusterName := o.ClusterName
+	clusterName := o.clusterName
 	// if cluster name is not specified with input argument, try to load it from file
 	if clusterName == "" {
 		// TODO, read cluster name from openshift struct if the spoke agent is running in an openshift cluster
 
 		// and then load the cluster name from the mounted secret
-		clusterNameFilePath := path.Join(o.HubKubeconfigDir, clientcert.ClusterNameFile)
+		clusterNameFilePath := path.Join(o.hubKubeconfigDir, clientcert.ClusterNameFile)
 		clusterNameBytes, err := ioutil.ReadFile(path.Clean(clusterNameFilePath))
 		switch {
 		case len(clusterNameInCert) > 0:
@@ -544,7 +616,7 @@ func (o *SpokeAgentOptions) getOrGenerateClusterAgentNames() (string, string) {
 	}
 
 	// try to load agent name from the mounted secret
-	agentNameFilePath := path.Join(o.HubKubeconfigDir, clientcert.AgentNameFile)
+	agentNameFilePath := path.Join(o.hubKubeconfigDir, clientcert.AgentNameFile)
 	agentNameBytes, err := ioutil.ReadFile(path.Clean(agentNameFilePath))
 	var agentName string
 	switch {
@@ -566,8 +638,8 @@ func (o *SpokeAgentOptions) getOrGenerateClusterAgentNames() (string, string) {
 }
 
 // getSpokeClusterCABundle returns the spoke cluster Kubernetes client CA data when SpokeExternalServerURLs is specified
-func (o *SpokeAgentOptions) getSpokeClusterCABundle(kubeConfig *rest.Config) ([]byte, error) {
-	if len(o.SpokeExternalServerURLs) == 0 {
+func (o *spokeAgent) getSpokeClusterCABundle(kubeConfig *rest.Config) ([]byte, error) {
+	if len(o.spokeExternalServerURLs) == 0 {
 		return nil, nil
 	}
 	if kubeConfig.CAData != nil {

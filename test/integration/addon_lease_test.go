@@ -176,14 +176,15 @@ var _ = ginkgo.Describe("Addon Lease Resync", func() {
 		// run registration agent
 		go func() {
 			features.DefaultMutableFeatureGate.Set("AddonManagement=true")
-			agentOptions := spoke.SpokeAgentOptions{
-				ClusterName:              managedClusterName,
-				BootstrapKubeconfig:      bootstrapKubeConfigFile,
-				HubKubeconfigSecret:      hubKubeconfigSecret,
-				HubKubeconfigDir:         hubKubeconfigDir,
-				ClusterHealthCheckPeriod: 1 * time.Minute,
-			}
-			err := agentOptions.RunSpokeAgent(context.Background(), &controllercmd.ControllerContext{
+			spokeAgent := spoke.NewSpokeAgent(
+				spoke.WithClusterName(managedClusterName),
+				spoke.WithBootstrapKubeconfig(bootstrapKubeConfigFile),
+				spoke.WithHubKubeconfigSecret(hubKubeconfigSecret),
+				spoke.WithHubKubeconfigDir(hubKubeconfigDir),
+				spoke.WithClusterHealthCheckPeriod(1*time.Minute),
+				spoke.WithSpokeKubeConfig(spokeCfg),
+			)
+			err := spokeAgent.Run(context.Background(), &controllercmd.ControllerContext{
 				KubeConfig:    spokeCfg,
 				EventRecorder: util.NewIntegrationTestEventRecorder("addontest"),
 			})

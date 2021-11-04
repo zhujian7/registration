@@ -91,14 +91,15 @@ var _ = ginkgo.Describe("Disaster Recovery", func() {
 
 	startRegistrationAgent := func(ctx context.Context, managedClusterName, bootstrapKubeConfigFile, hubKubeconfigSecret, hubKubeconfigDir string) {
 		features.DefaultMutableFeatureGate.Set("AddonManagement=true")
-		agentOptions := spoke.SpokeAgentOptions{
-			ClusterName:              managedClusterName,
-			BootstrapKubeconfig:      bootstrapKubeConfigFile,
-			HubKubeconfigSecret:      hubKubeconfigSecret,
-			HubKubeconfigDir:         hubKubeconfigDir,
-			ClusterHealthCheckPeriod: 1 * time.Minute,
-		}
-		err := agentOptions.RunSpokeAgent(ctx, &controllercmd.ControllerContext{
+		spokeAgent := spoke.NewSpokeAgent(
+			spoke.WithClusterName(managedClusterName),
+			spoke.WithBootstrapKubeconfig(bootstrapKubeConfigFile),
+			spoke.WithHubKubeconfigSecret(hubKubeconfigSecret),
+			spoke.WithHubKubeconfigDir(hubKubeconfigDir),
+			spoke.WithClusterHealthCheckPeriod(1*time.Minute),
+			spoke.WithSpokeKubeConfig(spokeCfg),
+		)
+		err := spokeAgent.Run(ctx, &controllercmd.ControllerContext{
 			KubeConfig:    spokeCfg,
 			EventRecorder: util.NewIntegrationTestEventRecorder("addontest"),
 		})

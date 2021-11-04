@@ -391,7 +391,7 @@ func createManagedCluster(clusterName, suffix string) (*clusterv1.ManagedCluster
 	}
 
 	// This test expects a bootstrap secret to exist in open-cluster-management/e2e-bootstrap-secret
-	e2eBootstrapSecret, err := hubClient.CoreV1().Secrets("open-cluster-management").Get(context.TODO(), "e2e-bootstrap-secret", metav1.GetOptions{})
+	e2eBootstrapSecret, err := hubClient.CoreV1().Secrets("open-cluster-management-agent").Get(context.TODO(), "e2e-bootstrap-secret", metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -672,7 +672,7 @@ func createManagedCluster(clusterName, suffix string) (*clusterv1.ManagedCluster
 }
 
 func spokeDeploymentWithAddonManagement(nsName, clusterName, image string) (*unstructured.Unstructured, error) {
-	deployment, err := assetToUnstructured("spoke/deployment.yaml")
+	deployment, err := assetToUnstructured("agent/deployment.yaml")
 	if err != nil {
 		return nil, err
 	}

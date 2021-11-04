@@ -34,14 +34,15 @@ var _ = ginkgo.Describe("Cluster Lease Update", func() {
 	ginkgo.It("managed cluster lease should be updated constantly", func() {
 		// run registration agent
 		go func() {
-			agentOptions := spoke.SpokeAgentOptions{
-				ClusterName:              managedClusterName,
-				BootstrapKubeconfig:      bootstrapKubeConfigFile,
-				HubKubeconfigSecret:      hubKubeconfigSecret,
-				HubKubeconfigDir:         hubKubeconfigDir,
-				ClusterHealthCheckPeriod: 1 * time.Minute,
-			}
-			err := agentOptions.RunSpokeAgent(context.Background(), &controllercmd.ControllerContext{
+			spokeAgent := spoke.NewSpokeAgent(
+				spoke.WithClusterName(managedClusterName),
+				spoke.WithBootstrapKubeconfig(bootstrapKubeConfigFile),
+				spoke.WithHubKubeconfigSecret(hubKubeconfigSecret),
+				spoke.WithHubKubeconfigDir(hubKubeconfigDir),
+				spoke.WithClusterHealthCheckPeriod(1*time.Minute),
+				spoke.WithSpokeKubeConfig(spokeCfg),
+			)
+			err := spokeAgent.Run(context.Background(), &controllercmd.ControllerContext{
 				KubeConfig:    spokeCfg,
 				EventRecorder: util.NewIntegrationTestEventRecorder("cluster-leasetest"),
 			})
@@ -86,14 +87,15 @@ var _ = ginkgo.Describe("Cluster Lease Update", func() {
 		ctx, stop := context.WithCancel(context.Background())
 		// run registration agent
 		go func() {
-			agentOptions := spoke.SpokeAgentOptions{
-				ClusterName:              managedClusterName,
-				BootstrapKubeconfig:      bootstrapKubeConfigFile,
-				HubKubeconfigSecret:      hubKubeconfigSecret,
-				HubKubeconfigDir:         hubKubeconfigDir,
-				ClusterHealthCheckPeriod: 1 * time.Minute,
-			}
-			err := agentOptions.RunSpokeAgent(ctx, &controllercmd.ControllerContext{
+			spokeAgent := spoke.NewSpokeAgent(
+				spoke.WithClusterName(managedClusterName),
+				spoke.WithBootstrapKubeconfig(bootstrapKubeConfigFile),
+				spoke.WithHubKubeconfigSecret(hubKubeconfigSecret),
+				spoke.WithHubKubeconfigDir(hubKubeconfigDir),
+				spoke.WithClusterHealthCheckPeriod(1*time.Minute),
+				spoke.WithSpokeKubeConfig(spokeCfg),
+			)
+			err := spokeAgent.Run(ctx, &controllercmd.ControllerContext{
 				KubeConfig:    spokeCfg,
 				EventRecorder: util.NewIntegrationTestEventRecorder("cluster-availabletest"),
 			})
@@ -151,14 +153,15 @@ var _ = ginkgo.Describe("Cluster Lease Update", func() {
 
 		// restart the registration agent
 		go func() {
-			agentOptions := spoke.SpokeAgentOptions{
-				ClusterName:              managedClusterName,
-				BootstrapKubeconfig:      bootstrapKubeConfigFile,
-				HubKubeconfigSecret:      hubKubeconfigSecret,
-				HubKubeconfigDir:         hubKubeconfigDir,
-				ClusterHealthCheckPeriod: 1 * time.Minute,
-			}
-			err := agentOptions.RunSpokeAgent(context.Background(), &controllercmd.ControllerContext{
+			spokeAgent := spoke.NewSpokeAgent(
+				spoke.WithClusterName(managedClusterName),
+				spoke.WithBootstrapKubeconfig(bootstrapKubeConfigFile),
+				spoke.WithHubKubeconfigSecret(hubKubeconfigSecret),
+				spoke.WithHubKubeconfigDir(hubKubeconfigDir),
+				spoke.WithClusterHealthCheckPeriod(1*time.Minute),
+				spoke.WithSpokeKubeConfig(spokeCfg),
+			)
+			err := spokeAgent.Run(context.Background(), &controllercmd.ControllerContext{
 				KubeConfig:    spokeCfg,
 				EventRecorder: util.NewIntegrationTestEventRecorder("cluster-leasetest"),
 			})

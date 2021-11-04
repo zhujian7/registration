@@ -35,14 +35,15 @@ var _ = ginkgo.Describe("Agent Restart", func() {
 		ginkgo.By("run registration agent")
 		ctx, stopAgent := context.WithCancel(context.Background())
 		go func() {
-			agentOptions := spoke.SpokeAgentOptions{
-				ClusterName:              managedClusterName,
-				BootstrapKubeconfig:      bootstrapFile,
-				HubKubeconfigSecret:      hubKubeconfigSecret,
-				HubKubeconfigDir:         hubKubeconfigDir,
-				ClusterHealthCheckPeriod: 1 * time.Minute,
-			}
-			err := agentOptions.RunSpokeAgent(ctx, &controllercmd.ControllerContext{
+			spokeAgent := spoke.NewSpokeAgent(
+				spoke.WithClusterName(managedClusterName),
+				spoke.WithBootstrapKubeconfig(bootstrapFile),
+				spoke.WithHubKubeconfigSecret(hubKubeconfigSecret),
+				spoke.WithHubKubeconfigDir(hubKubeconfigDir),
+				spoke.WithClusterHealthCheckPeriod(1*time.Minute),
+				spoke.WithSpokeKubeConfig(spokeCfg),
+			)
+			err := spokeAgent.Run(ctx, &controllercmd.ControllerContext{
 				KubeConfig:    spokeCfg,
 				EventRecorder: util.NewIntegrationTestEventRecorder("restart-test"),
 			})
@@ -120,14 +121,15 @@ var _ = ginkgo.Describe("Agent Restart", func() {
 		defer stopAgent()
 
 		go func() {
-			agentOptions := spoke.SpokeAgentOptions{
-				ClusterName:              managedClusterName,
-				BootstrapKubeconfig:      bootstrapFile,
-				HubKubeconfigSecret:      hubKubeconfigSecret,
-				HubKubeconfigDir:         hubKubeconfigDir,
-				ClusterHealthCheckPeriod: 1 * time.Minute,
-			}
-			err := agentOptions.RunSpokeAgent(ctx, &controllercmd.ControllerContext{
+			spokeAgent := spoke.NewSpokeAgent(
+				spoke.WithClusterName(managedClusterName),
+				spoke.WithBootstrapKubeconfig(bootstrapFile),
+				spoke.WithHubKubeconfigSecret(hubKubeconfigSecret),
+				spoke.WithHubKubeconfigDir(hubKubeconfigDir),
+				spoke.WithClusterHealthCheckPeriod(1*time.Minute),
+				spoke.WithSpokeKubeConfig(spokeCfg),
+			)
+			err := spokeAgent.Run(ctx, &controllercmd.ControllerContext{
 				KubeConfig:    spokeCfg,
 				EventRecorder: util.NewIntegrationTestEventRecorder("restart-test"),
 			})
@@ -179,14 +181,15 @@ var _ = ginkgo.Describe("Agent Restart", func() {
 		ginkgo.By("run registration agent")
 		ctx, stopAgent := context.WithCancel(context.Background())
 		go func() {
-			agentOptions := spoke.SpokeAgentOptions{
-				ClusterName:              managedClusterName,
-				BootstrapKubeconfig:      bootstrapFile,
-				HubKubeconfigSecret:      hubKubeconfigSecret,
-				HubKubeconfigDir:         hubKubeconfigDir,
-				ClusterHealthCheckPeriod: 1 * time.Minute,
-			}
-			err := agentOptions.RunSpokeAgent(ctx, &controllercmd.ControllerContext{
+			spokeAgent := spoke.NewSpokeAgent(
+				spoke.WithClusterName(managedClusterName),
+				spoke.WithBootstrapKubeconfig(bootstrapFile),
+				spoke.WithHubKubeconfigSecret(hubKubeconfigSecret),
+				spoke.WithHubKubeconfigDir(hubKubeconfigDir),
+				spoke.WithClusterHealthCheckPeriod(1*time.Minute),
+				spoke.WithSpokeKubeConfig(spokeCfg),
+			)
+			err := spokeAgent.Run(ctx, &controllercmd.ControllerContext{
 				KubeConfig:    spokeCfg,
 				EventRecorder: util.NewIntegrationTestEventRecorder("restart-test"),
 			})
@@ -250,14 +253,15 @@ var _ = ginkgo.Describe("Agent Restart", func() {
 
 		managedClusterName = "restart-test-cluster3"
 		go func() {
-			agentOptions := spoke.SpokeAgentOptions{
-				ClusterName:              managedClusterName,
-				BootstrapKubeconfig:      bootstrapFile,
-				HubKubeconfigSecret:      hubKubeconfigSecret,
-				HubKubeconfigDir:         hubKubeconfigDir,
-				ClusterHealthCheckPeriod: 1 * time.Minute,
-			}
-			err := agentOptions.RunSpokeAgent(ctx, &controllercmd.ControllerContext{
+			spokeAgent := spoke.NewSpokeAgent(
+				spoke.WithClusterName(managedClusterName),
+				spoke.WithBootstrapKubeconfig(bootstrapFile),
+				spoke.WithHubKubeconfigSecret(hubKubeconfigSecret),
+				spoke.WithHubKubeconfigDir(hubKubeconfigDir),
+				spoke.WithClusterHealthCheckPeriod(1*time.Minute),
+				spoke.WithSpokeKubeConfig(spokeCfg),
+			)
+			err := spokeAgent.Run(ctx, &controllercmd.ControllerContext{
 				KubeConfig:    spokeCfg,
 				EventRecorder: util.NewIntegrationTestEventRecorder("restart-test"),
 			})

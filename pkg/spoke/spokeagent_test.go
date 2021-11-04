@@ -107,77 +107,72 @@ func TestComplete(t *testing.T) {
 			}
 			defer os.RemoveAll(dir)
 
-			options := &SpokeAgentOptions{
-				ClusterName:         c.clusterName,
-				HubKubeconfigSecret: "hub-kubeconfig-secret",
-				HubKubeconfigDir:    dir,
-			}
-
-			if err := options.Complete(kubeClient.CoreV1(), context.TODO(), eventstesting.NewTestingEventRecorder(t)); err != nil {
+			options := NewSpokeAgent(WithClusterName(c.clusterName), WithHubKubeconfigDir(dir))
+			if err := options.complete(kubeClient.CoreV1(), context.TODO(), eventstesting.NewTestingEventRecorder(t)); err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
-			if options.ComponentNamespace == "" {
+			if options.componentNamespace == "" {
 				t.Error("component namespace should not be empty")
 			}
-			if options.ClusterName == "" {
+			if options.clusterName == "" {
 				t.Error("cluster name should not be empty")
 			}
-			if options.AgentName == "" {
+			if options.agentName == "" {
 				t.Error("agent name should not be empty")
 			}
-			if len(c.expectedClusterName) > 0 && options.ClusterName != c.expectedClusterName {
-				t.Errorf("expect cluster name %q but got %q", c.expectedClusterName, options.ClusterName)
+			if len(c.expectedClusterName) > 0 && options.clusterName != c.expectedClusterName {
+				t.Errorf("expect cluster name %q but got %q", c.expectedClusterName, options.clusterName)
 			}
-			if len(c.expectedAgentName) > 0 && options.AgentName != c.expectedAgentName {
-				t.Errorf("expect agent name %q but got %q", c.expectedAgentName, options.AgentName)
+			if len(c.expectedAgentName) > 0 && options.agentName != c.expectedAgentName {
+				t.Errorf("expect agent name %q but got %q", c.expectedAgentName, options.agentName)
 			}
 		})
 	}
 }
 
 func TestValidate(t *testing.T) {
-	defaultCompletedOptions := NewSpokeAgentOptions()
-	defaultCompletedOptions.BootstrapKubeconfig = "/spoke/bootstrap/kubeconfig"
-	defaultCompletedOptions.ClusterName = "testcluster"
-	defaultCompletedOptions.AgentName = "testagent"
+	defaultCompletedOptions := NewSpokeAgent()
+	defaultCompletedOptions.bootstrapKubeconfig = "/spoke/bootstrap/kubeconfig"
+	defaultCompletedOptions.clusterName = "testcluster"
+	defaultCompletedOptions.agentName = "testagent"
 
 	cases := []struct {
 		name        string
-		options     *SpokeAgentOptions
+		options     *spokeAgent
 		expectedErr string
 	}{
 		{
 			name:        "no bootstrap kubeconfig",
-			options:     &SpokeAgentOptions{},
+			options:     &spokeAgent{},
 			expectedErr: "bootstrap-kubeconfig is required",
 		},
 		{
 			name:        "no cluster name",
-			options:     &SpokeAgentOptions{BootstrapKubeconfig: "/spoke/bootstrap/kubeconfig"},
+			options:     &spokeAgent{bootstrapKubeconfig: "/spoke/bootstrap/kubeconfig"},
 			expectedErr: "cluster name is empty",
 		},
 		{
 			name:        "no agent name",
-			options:     &SpokeAgentOptions{BootstrapKubeconfig: "/spoke/bootstrap/kubeconfig", ClusterName: "testcluster"},
+			options:     &spokeAgent{bootstrapKubeconfig: "/spoke/bootstrap/kubeconfig", clusterName: "testcluster"},
 			expectedErr: "agent name is empty",
 		},
 		{
 			name: "invalid external server URLs",
-			options: &SpokeAgentOptions{
-				BootstrapKubeconfig:     "/spoke/bootstrap/kubeconfig",
-				ClusterName:             "testcluster",
-				AgentName:               "testagent",
-				SpokeExternalServerURLs: []string{"https://127.0.0.1:64433", "http://127.0.0.1:8080"},
+			options: &spokeAgent{
+				bootstrapKubeconfig:     "/spoke/bootstrap/kubeconfig",
+				clusterName:             "testcluster",
+				agentName:               "testagent",
+				spokeExternalServerURLs: []string{"https://127.0.0.1:64433", "http://127.0.0.1:8080"},
 			},
 			expectedErr: "\"http://127.0.0.1:8080\" is invalid",
 		},
 		{
 			name: "invalid cluster healthcheck period",
-			options: &SpokeAgentOptions{
-				BootstrapKubeconfig:      "/spoke/bootstrap/kubeconfig",
-				ClusterName:              "testcluster",
-				AgentName:                "testagent",
-				ClusterHealthCheckPeriod: 0,
+			options: &spokeAgent{
+				bootstrapKubeconfig:      "/spoke/bootstrap/kubeconfig",
+				clusterName:              "testcluster",
+				agentName:                "testagent",
+				clusterHealthCheckPeriod: 0,
 			},
 			expectedErr: "cluster healthcheck period must greater than zero",
 		},
@@ -262,10 +257,10 @@ func TestHasValidHubClientConfig(t *testing.T) {
 				testinghelpers.WriteFile(path.Join(tempDir, "tls.crt"), c.tlsCert)
 			}
 
-			options := &SpokeAgentOptions{
-				ClusterName:      c.clusterName,
-				AgentName:        c.agentName,
-				HubKubeconfigDir: tempDir,
+			options := &spokeAgent{
+				clusterName:      c.clusterName,
+				agentName:        c.agentName,
+				hubKubeconfigDir: tempDir,
 			}
 			valid, err := options.hasValidHubClientConfig()
 			if err != nil {
@@ -287,25 +282,25 @@ func TestGetOrGenerateClusterAgentNames(t *testing.T) {
 
 	cases := []struct {
 		name                string
-		options             *SpokeAgentOptions
+		options             *spokeAgent
 		expectedClusterName string
 		expectedAgentName   string
 	}{
 		{
 			name:                "cluster name is specified",
-			options:             &SpokeAgentOptions{ClusterName: "cluster0"},
+			options:             &spokeAgent{clusterName: "cluster0"},
 			expectedClusterName: "cluster0",
 		},
 		{
 			name:                "cluster name and agent name are in file",
-			options:             &SpokeAgentOptions{HubKubeconfigDir: tempDir},
+			options:             &spokeAgent{hubKubeconfigDir: tempDir},
 			expectedClusterName: "cluster1",
 			expectedAgentName:   "agent1",
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if c.options.HubKubeconfigDir != "" {
+			if c.options.hubKubeconfigDir != "" {
 				testinghelpers.WriteFile(path.Join(tempDir, clientcert.ClusterNameFile), []byte(c.expectedClusterName))
 				testinghelpers.WriteFile(path.Join(tempDir, clientcert.AgentNameFile), []byte(c.expectedAgentName))
 			}
@@ -336,32 +331,32 @@ func TestGetSpokeClusterCABundle(t *testing.T) {
 	cases := []struct {
 		name           string
 		caFile         string
-		options        *SpokeAgentOptions
+		options        *spokeAgent
 		expectedErr    string
 		expectedCAData []byte
 	}{
 		{
 			name:           "no external server URLs",
-			options:        &SpokeAgentOptions{},
+			options:        &spokeAgent{},
 			expectedErr:    "",
 			expectedCAData: nil,
 		},
 		{
 			name:           "no ca data",
-			options:        &SpokeAgentOptions{SpokeExternalServerURLs: []string{"https://127.0.0.1:6443"}},
+			options:        &spokeAgent{spokeExternalServerURLs: []string{"https://127.0.0.1:6443"}},
 			expectedErr:    "open : no such file or directory",
 			expectedCAData: nil,
 		},
 		{
 			name:           "has ca data",
-			options:        &SpokeAgentOptions{SpokeExternalServerURLs: []string{"https://127.0.0.1:6443"}},
+			options:        &spokeAgent{spokeExternalServerURLs: []string{"https://127.0.0.1:6443"}},
 			expectedErr:    "",
 			expectedCAData: []byte("cadata"),
 		},
 		{
 			name:           "has ca file",
 			caFile:         "ca.data",
-			options:        &SpokeAgentOptions{SpokeExternalServerURLs: []string{"https://127.0.0.1:6443"}},
+			options:        &spokeAgent{spokeExternalServerURLs: []string{"https://127.0.0.1:6443"}},
 			expectedErr:    "",
 			expectedCAData: []byte("cadata"),
 		},

@@ -71,6 +71,7 @@ cluster-ip:
 bootstrap-secret: cluster-ip
 	cp $(KUBECONFIG) dev-kubeconfig
 	$(KUBECTL) config set clusters.$(HUB_KUBECONFIG_CONTEXT).server https://$(CLUSTER_IP) --kubeconfig dev-kubeconfig
+	$(KUBECTL) config use-context $(HUB_KUBECONFIG_CONTEXT) --kubeconfig dev-kubeconfig
 	$(KUBECTL) config use-context $(AGENT_KUBECONFIG_CONTEXT) --kubeconfig $(AGENT_KUBECONFIG)
 	$(KUBECTL) delete secret bootstrap-secret -n open-cluster-management-agent --ignore-not-found --kubeconfig $(AGENT_KUBECONFIG)
 	$(KUBECTL) create secret generic bootstrap-secret --from-file=kubeconfig=dev-kubeconfig -n open-cluster-management-agent --kubeconfig $(AGENT_KUBECONFIG)
@@ -82,11 +83,17 @@ e2e-bootstrap-secret: cluster-ip
 	$(KUBECTL) delete secret e2e-bootstrap-secret -n open-cluster-management-agent --ignore-not-found --kubeconfig $(AGENT_KUBECONFIG)
 	$(KUBECTL) create secret generic e2e-bootstrap-secret --from-file=kubeconfig=e2e-kubeconfig -n open-cluster-management-agent --kubeconfig $(AGENT_KUBECONFIG)
 
-spoke-kubeconfig-secret:
-	cp $(SPOKE_KUBECONFIG) spoke-kubeconfig
+spoke-cluster-ip:
+	$(KUBECTL) config use-context $(AGENT_KUBECONFIG_CONTEXT) --kubeconfig $(AGENT_KUBECONFIG)
+	$(eval SPOKE_CLUSTER_IP?=$(shell $(KUBECTL) --kubeconfig $(AGENT_KUBECONFIG) get svc kubernetes -n default -o jsonpath="{.spec.clusterIP}"))
+	echo $(SPOKE_CLUSTER_IP)
+spoke-kubeconfig-secret: spoke-cluster-ip
+	cp $(SPOKE_KUBECONFIG) dev-spoke-kubeconfig
+	$(KUBECTL) config set clusters.$(SPOKE_KUBECONFIG_CONTEXT).server https://$(SPOKE_CLUSTER_IP) --kubeconfig dev-spoke-kubeconfig
+	$(KUBECTL) config use-context $(SPOKE_KUBECONFIG_CONTEXT) --kubeconfig dev-spoke-kubeconfig
 	$(KUBECTL) config use-context $(AGENT_KUBECONFIG_CONTEXT) --kubeconfig $(AGENT_KUBECONFIG)
 	$(KUBECTL) delete secret spoke-kubeconfig-secret -n open-cluster-management-agent --ignore-not-found --kubeconfig $(AGENT_KUBECONFIG)
-	$(KUBECTL) create secret generic spoke-kubeconfig-secret --from-file=kubeconfig=dev-kubeconfig -n open-cluster-management-agent --kubeconfig $(AGENT_KUBECONFIG)
+	$(KUBECTL) create secret generic spoke-kubeconfig-secret --from-file=kubeconfig=dev-spoke-kubeconfig -n open-cluster-management-agent --kubeconfig $(AGENT_KUBECONFIG)
 
 deploy-spoke-crd: ensure-kustomize
 	$(KUBECTL) config use-context $(SPOKE_KUBECONFIG_CONTEXT) --kubeconfig $(SPOKE_KUBECONFIG)
@@ -115,14 +122,23 @@ clean-spoke-agent: ensure-kustomize
 	$(KUBECTL) config use-context $(AGENT_KUBECONFIG_CONTEXT) --kubeconfig $(AGENT_KUBECONFIG)
 	$(KUSTOMIZE) build deploy/agent | $(KUBECTL) --kubeconfig $(AGENT_KUBECONFIG) delete --ignore-not-found -f -
 
-deploy-all: deploy-hub deploy-webhook bootstrap-secret deploy-spoke
+deploy-all: deploy-hub deploy-webhook deploy-spoke-agent bootstrap-secret deploy-spoke-crd
 
-undeploy-all: clean-hub clean-webhook clean-spoke-crd clean-spoke-agent
+undeploy-all: delete-managed-cluster clean-hub clean-webhook clean-spoke-crd clean-spoke-agent
+
+delete-managed-cluster:
+	$(KUBECTL) config use-context $(HUB_KUBECONFIG_CONTEXT) --kubeconfig $(HUB_KUBECONFIG)
+	$(KUBECTL) --kubeconfig $(HUB_KUBECONFIG) delete --ignore-not-found managedclusters cluster1
 
 build-e2e:
 	go test -c ./test/e2e -mod=vendor
 
-test-e2e: build-e2e ensure-kustomize deploy-hub deploy-webhook e2e-bootstrap-secret
+create-spoke-agent-namespace:
+	$(KUBECTL) config use-context $(AGENT_KUBECONFIG_CONTEXT) --kubeconfig $(AGENT_KUBECONFIG)
+	$(KUBECTL) --kubeconfig $(AGENT_KUBECONFIG) create namespace open-cluster-management-agent --dry-run=client -oyaml | $(KUBECTL) --kubeconfig $(AGENT_KUBECONFIG) apply -f -
+
+
+test-e2e: build-e2e ensure-kustomize deploy-hub deploy-webhook create-spoke-agent-namespace e2e-bootstrap-secret
 	./e2e.test -test.v -ginkgo.v
 
 clean-e2e:
